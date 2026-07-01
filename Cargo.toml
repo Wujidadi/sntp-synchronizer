@@ -1,0 +1,12 @@
+[package]
+name = "sntp-synchronizer"
+version = "0.1.0"
+edition = "2021"
+description = "依優先順序輪詢多台 SNTP 伺服器取得校時結果"
+
+[dependencies]
+chrono = "0.4"
+
+[[bin]]
+name = "sntp-synchronizer"
+path = "src/main.rs"
