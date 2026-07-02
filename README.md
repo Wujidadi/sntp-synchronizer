@@ -1,85 +1,85 @@
 # sntp-synchronizer
 
-依優先順序輪詢多台 SNTP 伺服器，取得最新校時結果的 Rust 命令列程式
+A Rust command-line tool that polls multiple SNTP servers in priority order to obtain the current time.
 
-## 功能
+## Features
 
-- 依名單順序由上往下逐台查詢，一取到有效結果即結束
-- 成功時以**亮綠色**顯示時間、**藍色**顯示來源伺服器
-- 逾時、解析失敗或伺服器錯誤一律靜默略過，直接嘗試下一台
-- 全部輪詢一次仍失敗，才以**紅色**顯示 `SNTP time synchronization failed`，並以 exit code 1 結束
+- Queries the servers one by one from top to bottom, stopping at the first valid result
+- On success, prints the time in **bright green** and the source server in **blue**
+- Timeouts, parse failures, and server errors are silently skipped, moving straight on to the next server
+- Only after a full round of polling fails does it print `SNTP time synchronization failed` in **red** and exit with code 1
 
-## 快速安裝
+## Quick install
 
-一鍵完成「建立設定檔 → 連結至使用者設定目錄 → 安裝全域可執行檔」：
+One command to "create the config file -> link it into the user config directory -> install the global executable":
 
 ```sh
 ./install
 ```
 
-腳本依序完成：
+The script performs these steps in order:
 
-1. 本地無 `servers.conf` 時，由 `servers.example.conf` 複製建立
-2. 建立符號連結 `~/.config/sntp-synchronizer/servers.conf` 指向本地 `servers.conf`
-3. 執行 `cargo install --path .` 安裝至 `~/.cargo/bin`
+1. Copies `servers.example.conf` to create `servers.conf` if no local one exists
+2. Creates the symlink `~/.config/sntp-synchronizer/servers.conf` pointing to the local `servers.conf`
+3. Runs `cargo install --path .` to install into `~/.cargo/bin`
 
-完成後於任意目錄皆可執行 `sntp-synchronizer`，並經上述連結讀到同一份設定檔
+Afterwards `sntp-synchronizer` can be run from any directory and will read the same config file through that link.
 
-## 建置與執行
+## Build and run
 
 ```sh
-cargo run               # 開發模式執行
-cargo build --release   # 產出最佳化執行檔於 target/release/
-cargo install --path .  # 僅安裝全域可執行檔至 ~/.cargo/bin（不建立設定檔連結）
+cargo run               # run in development mode
+cargo build --release   # produce an optimized executable under target/release/
+cargo install --path .  # install only the global executable into ~/.cargo/bin (no config link)
 ```
 
-安裝後可直接以指令名稱執行：
+Once installed, run it directly by name:
 
 ```sh
 sntp-synchronizer
 ```
 
-## 輸出範例
+## Output example
 
 ```
 2026-07-01 18:53:38.534 +0800
-來源 SNTP 伺服器：time.stdtime.gov.tw
+Source SNTP server: time.stdtime.gov.tw
 ```
 
-## 伺服器名單設定
+## Server list configuration
 
-伺服器名單可透過設定檔調整，設定檔屬本地檔案不納入版控；版控中僅提供範例檔 `servers.example.conf`
-未使用快速安裝時，可自行從範例檔複製建立設定檔後再依需求調整：
+The server list can be adjusted through a config file. The config file is a local file that is not version-controlled; only the example file `servers.example.conf` is kept in version control.
+When not using the quick install, create the config file from the example and adjust it as needed:
 
 ```sh
 cp servers.example.conf servers.conf
 ```
 
-程式依下列順序查找設定檔，取第一個存在且非空者，全部落空則回退內建預設名單：
+The program looks for the config file in the following order, taking the first one that exists and is non-empty, and falling back to the built-in default list if none apply:
 
-1. 環境變數 `SNTP_SERVERS_FILE` 指定的路徑
-2. 工作目錄下的 `./servers.conf`（方便開發與專案內執行）
-3. `~/.config/sntp-synchronizer/servers.conf`（全域安裝的標準位置，可為符號連結；亦遵循 `XDG_CONFIG_HOME`）
-4. 內建預設名單（`src/main.rs` 的 `SERVERS` 常數）
+1. The path given by the `SNTP_SERVERS_FILE` environment variable
+2. `./servers.conf` in the working directory (convenient for development and in-project runs)
+3. `~/.config/sntp-synchronizer/servers.conf` (the standard location for a global install; may be a symlink, and honors `XDG_CONFIG_HOME`)
+4. The built-in default list (the `SERVERS` constant in `src/main.rs`)
 
-設定檔格式：每行一個主機名稱，依優先順序由上往下嘗試；`#` 起始為註解，空行忽略
+Config file format: one host name per line, tried from top to bottom by priority; lines starting with `#` are comments and blank lines are ignored.
 
 ```sh
 SNTP_SERVERS_FILE=/path/to/my-servers.conf sntp-synchronizer
 ```
 
-## 實作說明
+## Implementation notes
 
-- 以 std 的 `UdpSocket` 自行組出 48 位元組 NTP 請求封包（首位元組 `0x1B`＝LI 0／VN 3／Mode 3），讀取偏移量 40 的 Transmit Timestamp
-- 時間換算與時區格式化使用 `chrono`，色彩以 ANSI 色碼直接處理
+- Builds the 48-byte NTP request packet by hand with the std `UdpSocket` (first byte `0x1B` = LI 0 / VN 3 / Mode 3) and reads the Transmit Timestamp at offset 40
+- Uses `chrono` for time conversion and time-zone formatting; colors are handled directly with ANSI codes
 
-## 可調整項
+## Tunable parameters
 
-集中於 `src/main.rs` 頂部常數：
+Collected in the constants at the top of `src/main.rs`:
 
-| 常數           | 說明                           |
-| -------------- | ------------------------------ |
-| `SERVERS`      | 內建預設名單（設定檔的回退值） |
-| `SERVERS_FILE` | 設定檔預設路徑                 |
-| `TIMEOUT_SECS` | 單台查詢逾時秒數（預設 3）     |
-| `GREEN` 等色碼 | 各狀態顯示色彩                 |
+| Constant       | Description                                     |
+| -------------- | ----------------------------------------------- |
+| `SERVERS`      | Built-in default list (config fallback)         |
+| `SERVERS_FILE` | Default config file path                        |
+| `TIMEOUT_SECS` | Per-server query timeout in seconds (default 3) |
+| `GREEN` etc.   | Colors for each status                          |

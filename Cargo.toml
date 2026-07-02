@@ -3,7 +3,7 @@ name = "sntp-synchronizer"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "依優先順序輪詢多台 SNTP 伺服器取得校時結果"
+description = "Poll multiple SNTP servers in priority order to obtain the current time"
 
 [dependencies]
 chrono = "0.4"
