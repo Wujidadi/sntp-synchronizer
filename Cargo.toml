@@ -1,7 +1,8 @@
 [package]
 name = "sntp-synchronizer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 description = "依優先順序輪詢多台 SNTP 伺服器取得校時結果"
 
 [dependencies]

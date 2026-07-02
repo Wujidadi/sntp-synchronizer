@@ -1,9 +1,11 @@
 use std::net::{ToSocketAddrs, UdpSocket};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{Local, TimeZone, Utc};
 
-// 依優先順序排列的 SNTP 伺服器名單，由上往下依序嘗試
+// 內建預設的 SNTP 伺服器名單，依優先順序由上往下嘗試
+// 找不到設定檔或其內容為空時，回退使用此名單
 const SERVERS: &[&str] = &[
     "time.stdtime.gov.tw",
     "tock.stdtime.gov.tw",
@@ -23,6 +25,16 @@ const SERVERS: &[&str] = &[
     "time5.facebook.com",
 ];
 
+// 設定檔名稱，同時用於工作目錄與使用者設定目錄
+// 每行一個主機名稱，# 起始為註解，空行忽略
+const SERVERS_FILE: &str = "servers.conf";
+
+// 用於覆寫設定檔路徑的環境變數名稱
+const SERVERS_FILE_ENV: &str = "SNTP_SERVERS_FILE";
+
+// 使用者設定目錄下的子目錄名稱，即 ~/.config/<此名稱>/servers.conf
+const CONFIG_DIR_NAME: &str = "sntp-synchronizer";
+
 // NTP 埠號
 const NTP_PORT: u16 = 123;
 
@@ -37,6 +49,66 @@ const GREEN: &str = "\x1b[92m"; // 亮綠色
 const BLUE: &str = "\x1b[94m"; // 藍色
 const RED: &str = "\x1b[91m"; // 紅色
 const RESET: &str = "\x1b[0m";
+
+// 依序回傳設定檔的候選路徑：環境變數 → 工作目錄 → 使用者設定目錄
+fn config_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // 1. 環境變數指定的路徑（最高優先）
+    if let Ok(p) = std::env::var(SERVERS_FILE_ENV) {
+        if !p.is_empty() {
+            paths.push(PathBuf::from(p));
+        }
+    }
+
+    // 2. 工作目錄下的設定檔（方便開發與專案內執行）
+    paths.push(PathBuf::from(SERVERS_FILE));
+
+    // 3. 使用者設定目錄（全域安裝後的標準位置）
+    if let Some(dir) = user_config_dir() {
+        paths.push(dir.join(CONFIG_DIR_NAME).join(SERVERS_FILE));
+    }
+
+    paths
+}
+
+// 取得使用者設定目錄，優先 XDG_CONFIG_HOME，其次 ~/.config
+fn user_config_dir() -> Option<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return Some(PathBuf::from(xdg));
+        }
+    }
+
+    std::env::var("HOME")
+        .ok()
+        .filter(|home| !home.is_empty())
+        .map(|home| PathBuf::from(home).join(".config"))
+}
+
+// 解析設定檔內容為主機名稱清單，去除每行註解與前後空白並濾掉空行
+fn parse_servers(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+// 載入伺服器名單，依候選路徑順序讀取，全部落空時回退為內建預設名單
+fn load_servers() -> Vec<String> {
+    for path in config_candidates() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let list = parse_servers(&content);
+            if !list.is_empty() {
+                return list;
+            }
+        }
+    }
+
+    // 回退為內建預設名單
+    SERVERS.iter().map(|s| s.to_string()).collect()
+}
 
 // 向單一 SNTP 伺服器查詢，成功時回傳（Unix 秒數，奈秒）
 fn query(server: &str) -> Option<(i64, u32)> {
@@ -78,8 +150,8 @@ fn query(server: &str) -> Option<(i64, u32)> {
 }
 
 fn main() {
-    for server in SERVERS {
-        if let Some((secs, nanos)) = query(server) {
+    for server in load_servers() {
+        if let Some((secs, nanos)) = query(&server) {
             // 換算成本地時區的時間並格式化輸出
             if let Some(utc) = Utc.timestamp_opt(secs, nanos).single() {
                 let local = utc.with_timezone(&Local);

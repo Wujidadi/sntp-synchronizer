@@ -213,3 +213,6 @@ sonar-project.properties
 
 # But include test fixtures
 !tests/fixtures/*.km[lz]
+
+# 本地 SNTP 伺服器名單設定檔（請從 servers.example.conf 複製建立）
+servers.conf

@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+# 快速安裝腳本
+#
+# 依序完成三件事：
+#   1. 確保本地 servers.conf 存在（不存在則由 servers.example.conf 複製）
+#   2. 於使用者設定目錄建立指向本地 servers.conf 的符號連結
+#      （~/.config/sntp-synchronizer/servers.conf -> <專案>/servers.conf）
+#   3. 執行 cargo install --path . 安裝為全域可執行檔
+#
+# 用法：於專案根目錄執行 ./install
+
+set -eu
+
+# 專案根目錄（本腳本所在目錄）
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
+CONF="$SCRIPT_DIR/servers.conf"
+EXAMPLE="$SCRIPT_DIR/servers.example.conf"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sntp-synchronizer"
+LINK="$CONFIG_DIR/servers.conf"
+
+# 1. 確保本地設定檔存在
+if [ ! -f "$CONF" ]; then
+    cp "$EXAMPLE" "$CONF"
+    echo "已由範例建立設定檔：$CONF"
+fi
+
+# 2. 建立設定目錄並連結設定檔
+mkdir -p "$CONFIG_DIR"
+
+# 若連結位置已存在且非符號連結，先備份避免覆蓋既有實體檔
+if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+    mv "$LINK" "$LINK.bak"
+    echo "已備份既有設定檔：$LINK -> $LINK.bak"
+fi
+
+ln -sfn "$CONF" "$LINK"
+echo "已連結設定檔：$LINK -> $CONF"
+
+# 3. 安裝為全域可執行檔
+cargo install --path .
+echo "安裝完成，可直接執行：sntp-synchronizer"
