@@ -24,6 +24,10 @@
 - 自行以 `UdpSocket` 處理 NTP 封包，不引入額外網路相依
 - 修改後以 `cargo build` 確認可編譯
 
+## 版本控制
+
+- Git commit message 一律採用英文，並遵循 Conventional Commits 格式
+
 ## 常用指令
 
 ```sh
