@@ -4,16 +4,19 @@
 
 ## 專案概觀
 
-單一 binary 的 Rust 命令列程式，依優先順序輪詢多台 SNTP 伺服器取得校時結果
-所有邏輯集中於 `src/main.rs`，相依僅 `chrono`
+單一 binary 的 Rust 命令列程式，依優先順序輪詢多台 SNTP 伺服器，取得校時結果後寫入系統時鐘
+所有邏輯集中於 `src/main.rs`，相依為 `chrono`（時間轉換與格式化）與 `libc`（`settimeofday` 寫入系統時鐘）
 
 ## 核心行為（修改時務必維持）
 
 - 伺服器名單依序查找設定檔：環境變數 `SNTP_SERVERS_FILE` → 工作目錄 `./servers.conf` → `~/.config/sntp-synchronizer/servers.conf`（遵循 `XDG_CONFIG_HOME`），取第一個存在且非空者，全部落空時回退為內建 `SERVERS` 常數
 - 依名單順序由上往下查詢，取到第一個有效結果即結束
-- 查詢失敗（逾時、解析錯誤、伺服器錯誤、秒數為 0）一律**靜默略過**，不得輸出任何錯誤訊息
-- 成功：亮綠色時間 ＋ 藍色來源伺服器
-- 全部失敗：紅色 `SNTP time synchronization failed`，並以 exit code 1 結束
+- 查詢時記錄本機收送時刻，套用標準 NTP offset 公式 `((T2 − T1) ＋ (T3 − T4)) ／ 2` 補償往返延遲，取得校正後的當下時間
+- 查詢失敗（逾時、解析錯誤、伺服器錯誤、Transmit Timestamp 秒數為 0）一律**靜默略過**，不得輸出任何錯誤訊息
+- 取得有效時間後，以 `libc::settimeofday` 寫入系統時鐘（需 root 權限）
+- 成功（含寫入時鐘）：亮綠色時間 ＋ 藍色來源伺服器
+- 權限不足（`EPERM`）：紅色提示改用 `sudo`；其他寫入錯誤：紅色錯誤訊息，皆以 exit code 1 結束
+- 全部查詢失敗：紅色 `SNTP time synchronization failed`，並以 exit code 1 結束
 
 ## 慣例
 
@@ -31,7 +34,7 @@
 ## 常用指令
 
 ```sh
-cargo run               # 執行
+sudo cargo run          # 執行（寫入系統時鐘需 root）
 cargo build --release   # 產出最佳化執行檔
 cargo install --path .  # 僅安裝全域可執行檔至 ~/.cargo/bin（不建立設定檔連結）
 ./install               # 快速安裝：建立設定檔連結並安裝全域可執行檔

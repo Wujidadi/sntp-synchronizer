@@ -1,6 +1,6 @@
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{Local, TimeZone, Utc};
 
@@ -110,8 +110,24 @@ fn load_servers() -> Vec<String> {
     SERVERS.iter().map(|s| s.to_string()).collect()
 }
 
-// Query a single SNTP server, returning (Unix seconds, nanoseconds) on success
-fn query(server: &str) -> Option<(i64, u32)> {
+// Read the local clock as a floating-point count of seconds since the Unix epoch
+fn now_unix() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+// Convert an 8-byte NTP timestamp (32-bit seconds + 32-bit fraction) into seconds since the Unix epoch
+fn ntp_to_unix(bytes: &[u8]) -> f64 {
+    let seconds = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
+    let fraction = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as f64;
+    seconds - NTP_UNIX_DELTA as f64 + fraction / 4_294_967_296.0
+}
+
+// Query a single SNTP server, returning the corrected current Unix time (in seconds) on success
+// The correction applies the standard NTP offset formula to cancel out one-way network delay
+fn query(server: &str) -> Option<f64> {
     // Resolve the host name and take the first usable address
     let addr = (server, NTP_PORT).to_socket_addrs().ok()?.next()?;
 
@@ -125,41 +141,89 @@ fn query(server: &str) -> Option<(i64, u32)> {
     // Build the 48-byte NTP request packet; the first byte 0x1B means LI=0, VN=3, Mode=3 (client)
     let mut request = [0u8; 48];
     request[0] = 0x1B;
+
+    // Record the local transmit time (T1) right before sending and the local receive time (T4) right after receiving
+    let t1 = now_unix();
     socket.send(&request).ok()?;
 
     // Receive the response and check its length
     let mut response = [0u8; 48];
     let received = socket.recv(&mut response).ok()?;
+    let t4 = now_unix();
     if received < 48 {
         return None;
     }
 
-    // The Transmit Timestamp is at offset 40: the first 4 bytes are the seconds and the last 4 bytes are the fraction
-    let seconds = u32::from_be_bytes([response[40], response[41], response[42], response[43]]) as u64;
-    let fraction = u32::from_be_bytes([response[44], response[45], response[46], response[47]]) as u64;
-
-    // Treat a zero seconds value as an invalid response (Kiss-o'-Death or a malformed packet)
-    if seconds == 0 {
+    // Treat a zero Transmit Timestamp as an invalid response (Kiss-o'-Death or a malformed packet)
+    if response[40..44] == [0, 0, 0, 0] {
         return None;
     }
 
-    let unix_secs = seconds.checked_sub(NTP_UNIX_DELTA)? as i64;
-    let nanos = (fraction * 1_000_000_000 >> 32) as u32;
+    // Server Receive Timestamp (T2) at offset 32 and Transmit Timestamp (T3) at offset 40
+    let t2 = ntp_to_unix(&response[32..40]);
+    let t3 = ntp_to_unix(&response[40..48]);
 
-    Some((unix_secs, nanos))
+    // Clock offset between this host and the server, averaging out the round-trip delay
+    let offset = ((t2 - t1) + (t3 - t4)) / 2.0;
+
+    // The true current time is the local receive time adjusted by the offset
+    Some(t4 + offset)
+}
+
+// Write the given Unix time (in seconds) to the system clock via settimeofday
+fn set_system_time(unix: f64) -> std::io::Result<()> {
+    let secs = unix.floor();
+    let mut micros = ((unix - secs) * 1_000_000.0).round() as i64;
+    let mut secs = secs as i64;
+
+    // Carry a rounded-up fraction into the seconds field
+    if micros >= 1_000_000 {
+        secs += 1;
+        micros -= 1_000_000;
+    }
+
+    let tv = libc::timeval {
+        tv_sec: secs as libc::time_t,
+        tv_usec: micros as libc::suseconds_t,
+    };
+
+    // SAFETY: tv points to a valid timeval for the duration of the call; the time zone argument is null
+    let ret = unsafe { libc::settimeofday(&tv, std::ptr::null()) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 fn main() {
     for server in load_servers() {
-        if let Some((secs, nanos)) = query(&server) {
-            // Convert to the local time zone and format the output
-            if let Some(utc) = Utc.timestamp_opt(secs, nanos).single() {
-                let local = utc.with_timezone(&Local);
-                let formatted = local.format("%Y-%m-%d %H:%M:%S%.3f %z").to_string();
+        if let Some(unix) = query(&server) {
+            // Split into whole seconds and nanoseconds for time-zone conversion and formatting
+            let secs = unix.floor();
+            let nanos = ((unix - secs) * 1_000_000_000.0).round() as u32;
+            let Some(utc) = Utc.timestamp_opt(secs as i64, nanos).single() else {
+                continue;
+            };
+            let local = utc.with_timezone(&Local);
+            let formatted = local.format("%Y-%m-%d %H:%M:%S%.3f %z").to_string();
 
-                println!("{GREEN}{formatted}{RESET}");
-                println!("{BLUE}Source SNTP server: {server}{RESET}");
-                return;
+            // Write the corrected time to the system clock before reporting success
+            match set_system_time(unix) {
+                Ok(()) => {
+                    println!("{GREEN}{formatted}{RESET}");
+                    println!("{BLUE}Source SNTP server: {server}{RESET}");
+                    return;
+                }
+                Err(e) => {
+                    // A valid time was obtained but the clock could not be set; this will not differ across servers, so stop here
+                    if e.raw_os_error() == Some(libc::EPERM) {
+                        eprintln!("{RED}Setting the system clock requires root privileges; re-run with sudo{RESET}");
+                    } else {
+                        eprintln!("{RED}Failed to set the system clock: {e}{RESET}");
+                    }
+                    std::process::exit(1);
+                }
             }
         }
     }

@@ -1,13 +1,16 @@
 # sntp-synchronizer
 
-A Rust command-line tool that polls multiple SNTP servers in priority order to obtain the current time.
+A Rust command-line tool that polls multiple SNTP servers in priority order and synchronizes the system clock.
 
 ## Features
 
 - Queries the servers one by one from top to bottom, stopping at the first valid result
-- On success, prints the time in **bright green** and the source server in **blue**
+- Applies the standard NTP offset formula to cancel out one-way network delay, then writes the corrected time to the system clock
+- On success, prints the synchronized time in **bright green** and the source server in **blue**
 - Timeouts, parse failures, and server errors are silently skipped, moving straight on to the next server
 - Only after a full round of polling fails does it print `SNTP time synchronization failed` in **red** and exit with code 1
+
+> **Note:** Setting the system clock requires root privileges, so run the tool with `sudo`. Without them it prints a hint to re-run with `sudo` and exits with code 1.
 
 ## Quick install
 
@@ -28,15 +31,15 @@ Afterwards `sntp-synchronizer` can be run from any directory and will read the s
 ## Build and run
 
 ```sh
-cargo run               # run in development mode
-cargo build --release   # produce an optimized executable under target/release/
-cargo install --path .  # install only the global executable into ~/.cargo/bin (no config link)
+cargo build --release    # produce an optimized executable under target/release/
+sudo cargo run           # run in development mode (root is required to set the clock)
+cargo install --path .   # install only the global executable into ~/.cargo/bin (no config link)
 ```
 
 Once installed, run it directly by name:
 
 ```sh
-sntp-synchronizer
+sudo sntp-synchronizer
 ```
 
 ## Output example
@@ -70,7 +73,8 @@ SNTP_SERVERS_FILE=/path/to/my-servers.conf sntp-synchronizer
 
 ## Implementation notes
 
-- Builds the 48-byte NTP request packet by hand with the std `UdpSocket` (first byte `0x1B` = LI 0 / VN 3 / Mode 3) and reads the Transmit Timestamp at offset 40
+- Builds the 48-byte NTP request packet by hand with the std `UdpSocket` (first byte `0x1B` = LI 0 / VN 3 / Mode 3) and reads the server Receive and Transmit timestamps
+- Computes the clock offset as `((T2 - T1) + (T3 - T4)) / 2` from the four NTP timestamps and writes the corrected time via `libc::settimeofday`
 - Uses `chrono` for time conversion and time-zone formatting; colors are handled directly with ANSI codes
 
 ## Tunable parameters

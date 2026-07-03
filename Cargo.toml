@@ -3,10 +3,11 @@ name = "sntp-synchronizer"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Poll multiple SNTP servers in priority order to obtain the current time"
+description = "Poll multiple SNTP servers in priority order and synchronize the system clock"
 
 [dependencies]
 chrono = "0.4"
+libc = "0.2"
 
 [[bin]]
 name = "sntp-synchronizer"
